@@ -11,78 +11,82 @@ class GovernmentAgent:
         self.lr = lr
         self.discount = discount # Gamma
         self.epsilon = epsilon
-        self.eps_decay = 0.9995
+        self.eps_decay = 0.999999 # Réduction de l'exploration
         self.q_table = {} 
 
     def discretize_state(self, pollution):
         """
-        On simplifie l'état à la pollution seule pour stabiliser l'apprentissage au début.
-        Si tu passes un vecteur [taxe, prod, pollution], on ne prend que la pollution.
+        On simplifie l'état à la pollution seule pour stabiliser l'apprentissage.
         """
         if isinstance(pollution, np.ndarray):
-            val = pollution[-1] # On prend le dernier élément (pollution)
+            val = pollution[-1] 
         else:
             val = pollution
             
-        return int(np.clip(val / 5, 0, 19)) # 20 paliers
+        return int(np.clip(val / 5, 0, 19)) # 20 paliers de pollution
 
     def get_action(self, state):
         s = self.discretize_state(state)
         
         if s not in self.q_table:
             self.q_table[s] = np.zeros(len(self.actions))
-
+        
         if random.random() < self.epsilon:
             return random.randint(0, len(self.actions) - 1)
-        else:
-            return np.argmax(self.q_table[s])
+        
+        return np.argmax(self.q_table[s])
 
-    def learn(self, state, action_idx, reward, next_state):
-        s = self.discretize_state(state)
-        ns = self.discretize_state(next_state)
+    def learn(self, s, a_idx, r, ns):
+        s_dis = self.discretize_state(s)
+        ns_dis = self.discretize_state(ns)
         
-        if ns not in self.q_table:
-            self.q_table[ns] = np.zeros(len(self.actions))
+        if ns_dis not in self.q_table:
+            self.q_table[ns_dis] = np.zeros(len(self.actions))
             
-        old_value = self.q_table[s][action_idx]
-        next_max = np.max(self.q_table[ns])
+        # Q-Learning Target
+        best_next_action = np.max(self.q_table[ns_dis])
+        td_target = r + self.discount * best_next_action
         
-        # Mise à jour Q-Value
-        self.q_table[s][action_idx] = old_value + self.lr * (reward + self.discount * next_max - old_value)
-        
-        # Decay epsilon
-        self.epsilon = max(0.01, self.epsilon * self.eps_decay)
+        # Mise à jour de la Q-Table
+        self.q_table[s_dis][a_idx] += self.lr * (td_target - self.q_table[s_dis][a_idx])
+
+    def decay_epsilon(self):
+        """Réduit l'exploration du gouvernement (à appeler dans le main)"""
+        self.epsilon = max(0.8, self.epsilon * self.eps_decay)
+
 
 class FirmAgent:
-    def __init__(self, lr=0.1, discount=0.9, epsilon=1.0):
-        # Actions : Quantités possibles à produire (ex: de 0 à 20)
-        self.actions = np.linspace(0, 20, 21) 
+    def __init__(self, lr=0.1, epsilon=1.0):
+        # Actions : Quantités possibles à produire (de 0 à 15 pour plus de précision)
+        self.actions = np.linspace(0, 15, 16) 
         self.lr = lr
-        self.discount = discount
         self.epsilon = epsilon
-        self.eps_decay = 0.999
+        self.eps_decay = 0.99999
         self.q_table = {}
 
-    def get_state_key(self, action_type, action_value):
-        # On crée un état combinant le type de politique et sa valeur
-        # Exemple : (0, 2.0) pour une taxe de 2.0
-        return (action_type, round(action_value, 1))
-
-    def get_action(self, state_key):
+    def get_action(self, action_type, action_value):
+        """La firme observe la politique (état) avant de décider"""
+        state_key = (int(action_type), round(float(action_value), 1))
+        
         if state_key not in self.q_table:
-            self.q_table[state_key] = np.zeros(len(self.actions))
+            # INITIALISATION OPTIMISTE : on commence à 20 pour forcer l'exploration
+            self.q_table[state_key] = np.ones(len(self.actions)) * 20.0
         
         if random.random() < self.epsilon:
             return random.randint(0, len(self.actions) - 1)
+        
         return np.argmax(self.q_table[state_key])
 
-    def learn(self, s_key, a_idx, r, ns_key):
-        if ns_key not in self.q_table:
-            self.q_table[ns_key] = np.zeros(len(self.actions))
+    def learn(self, action_type, action_value, a_idx, r):
+        """Apprentissage basé sur le profit immédiat (discount=0)"""
+        state_key = (int(action_type), round(float(action_value), 1))
         
-        old_val = self.q_table[s_key][a_idx]
-        next_max = np.max(self.q_table[ns_key])
-        
-        # La firme apprend à maximiser son propre profit intertemporel
-        self.q_table[s_key][a_idx] = old_val + self.lr * (r + self.discount * next_max - old_val)
-        self.epsilon = max(0.01, self.epsilon * self.eps_decay)
+        if state_key not in self.q_table:
+            self.q_table[state_key] = np.ones(len(self.actions)) * 20.0
+            
+        # La firme apprend si l'action choisie a rapporté le profit r attendu
+        self.q_table[state_key][a_idx] += self.lr * (r - self.q_table[state_key][a_idx])
+
+    def decay_epsilon(self):
+        """Réduit l'exploration de la firme (à appeler dans le main)"""
+        self.epsilon = max(0.8, self.epsilon * self.eps_decay)
